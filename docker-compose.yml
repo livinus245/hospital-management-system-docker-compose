@@ -1,0 +1,244 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: hospital-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-secret123}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --eval \"db.adminCommand('ping').ok\" admin | grep 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: gateway
+    container_name: api-gateway
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      PATIENT_RECORDS_SERVICE_URL: http://patient-records-service:3000
+      PHYSICIANS_SERVICE_URL: http://physicians-service:3000
+      APPOINTMENTS_SERVICE_URL: http://appointments-service:3000
+      WAITTIME_SERVICE_URL: http://waittime-service:3000
+      ADMISSION_SERVICE_URL: http://admission-service:3000
+      BILLING_SERVICE_URL: http://billing-service:3000
+      FAKE_PAYMENT_GATEWAY_URL: http://fake-payment-gateway:3000
+      PAYMENTS_SERVICE_URL: http://payments-service:3000
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:3000
+      ADMINISTRATION_SERVICE_URL: http://administration-service:3000
+    depends_on:
+      - patient-records-service
+      - physicians-service
+      - appointments-service
+      - waittime-service
+      - admission-service
+      - billing-service
+      - fake-payment-gateway
+      - payments-service
+      - notifications-service
+      - administration-service
+    ports:
+      - "8080:8080"
+
+  patient-records-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/patient-records
+    container_name: patient-records-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/patient_records?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+
+  physicians-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/physicians
+    container_name: physicians-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/physicians?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3002:3000"
+
+  appointments-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/appointments
+    container_name: appointments-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/appointments?authSource=admin
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:3000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      notifications-service:
+        condition: service_started
+    ports:
+      - "3003:3000"
+
+  waittime-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/waittime
+    container_name: waittime-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/waittime?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3004:3000"
+
+  admission-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/admission
+    container_name: admission-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/admission?authSource=admin
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:3000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      notifications-service:
+        condition: service_started
+    ports:
+      - "3005:3000"
+
+  billing-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/billing
+    container_name: billing-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/billing?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3006:3000"
+
+  fake-payment-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/fake-payment-gateway
+    container_name: fake-payment-gateway
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/fake_payment_gateway?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3007:3000"
+
+  payments-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/payments
+    container_name: payments-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/payments?authSource=admin
+      BILLING_SERVICE_URL: http://billing-service:3000
+      FAKE_PAYMENT_GATEWAY_URL: http://fake-payment-gateway:3000
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:3000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      billing-service:
+        condition: service_started
+      fake-payment-gateway:
+        condition: service_started
+      notifications-service:
+        condition: service_started
+    ports:
+      - "3008:3000"
+
+  notifications-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/notifications
+    container_name: notifications-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/notifications?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3009:3000"
+
+  administration-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_DIR: services/administration
+    container_name: administration-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-secret123}@mongodb:27017/administration?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3010:3000"
+
+volumes:
+  mongo-data:

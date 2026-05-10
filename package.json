@@ -1,0 +1,27 @@
+{
+  "name": "hospital-management-system",
+  "version": "1.0.0",
+  "description": "Docker Compose based hospital management system built with Node.js microservices and MongoDB.",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start:gateway": "node gateway/src/index.js",
+    "start:patient-records": "node services/patient-records/src/index.js",
+    "start:physicians": "node services/physicians/src/index.js",
+    "start:appointments": "node services/appointments/src/index.js",
+    "start:waittime": "node services/waittime/src/index.js",
+    "start:admission": "node services/admission/src/index.js",
+    "start:billing": "node services/billing/src/index.js",
+    "start:fake-payment-gateway": "node services/fake-payment-gateway/src/index.js",
+    "start:payments": "node services/payments/src/index.js",
+    "start:notifications": "node services/notifications/src/index.js",
+    "start:administration": "node services/administration/src/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "http-proxy-middleware": "^3.0.0",
+    "mongoose": "^8.4.1",
+    "morgan": "^1.10.0"
+  }
+}

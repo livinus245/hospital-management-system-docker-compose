@@ -155,3 +155,17 @@ curl -X POST http://localhost:8080/api/payments/payments/process \
 - Each microservice has its own MongoDB database on the shared MongoDB server.
 - Notifications are simulated and persisted rather than sent to real providers.
 - The fake payment gateway is intentionally deterministic so success and failure cases are easy to test.
+
+## Jenkins Image Pipeline
+
+The root `Jenkinsfile` builds all 11 application images, assigns the immutable tag `<environment>-<build-number>-<git-sha>`, scans every image with Trivy, and pushes only when all scans pass. The registry is selected at build time: Docker Hub or Amazon ECR.
+
+Jenkins agent requirements:
+
+- Linux agent with label `docker`
+- Docker, Trivy, AWS CLI, and Git installed
+- Docker Hub Username/Password credential (default ID `dockerhub-credentials`)
+- AWS credential from the AWS Credentials plugin (default ID `aws-credentials`) when ECR is selected
+- Jenkins plugins: Pipeline, Credentials Binding, AWS Credentials, Timestamper, and Workspace Cleanup
+
+Important parameters include the deployment environment, registry provider, image/repository prefixes, registry credential IDs, AWS account/region settings, Trivy severity threshold, and optional `<environment>-latest` promotion.

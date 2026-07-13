@@ -1,0 +1,57 @@
+global:
+  imageRegistry: ""
+  imagePrefix: hospital-management
+  imageTag: latest
+  imagePullPolicy: IfNotPresent
+
+replicaCount: 1
+
+mongodb:
+  image: mongo:7
+  storage: 10Gi
+  secretName: hospital-mongodb-auth
+
+services:
+  api-gateway:
+    port: 8080
+    servicePort: 80
+    serviceType: LoadBalancer
+    extraEnv:
+      PATIENT_RECORDS_SERVICE_URL: http://patient-records-service:3000
+      PHYSICIANS_SERVICE_URL: http://physicians-service:3000
+      APPOINTMENTS_SERVICE_URL: http://appointments-service:3000
+      WAITTIME_SERVICE_URL: http://waittime-service:3000
+      ADMISSION_SERVICE_URL: http://admission-service:3000
+      BILLING_SERVICE_URL: http://billing-service:3000
+      FAKE_PAYMENT_GATEWAY_URL: http://fake-payment-gateway:3000
+      PAYMENTS_SERVICE_URL: http://payments-service:3000
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:3000
+      ADMINISTRATION_SERVICE_URL: http://administration-service:3000
+  patient-records-service:
+    database: patient_records
+  physicians-service:
+    database: physicians
+  appointments-service:
+    database: appointments
+    extraEnv:
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:3000
+  waittime-service:
+    database: waittime
+  admission-service:
+    database: admission
+    extraEnv:
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:3000
+  billing-service:
+    database: billing
+  fake-payment-gateway:
+    database: fake_payment_gateway
+  payments-service:
+    database: payments
+    extraEnv:
+      BILLING_SERVICE_URL: http://billing-service:3000
+      FAKE_PAYMENT_GATEWAY_URL: http://fake-payment-gateway:3000
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:3000
+  notifications-service:
+    database: notifications
+  administration-service:
+    database: administration

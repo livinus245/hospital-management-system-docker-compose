@@ -1,0 +1,246 @@
+def services = [
+  'api-gateway'            : 'gateway',
+  'patient-records-service': 'services/patient-records',
+  'physicians-service'     : 'services/physicians',
+  'appointments-service'   : 'services/appointments',
+  'waittime-service'       : 'services/waittime',
+  'admission-service'      : 'services/admission',
+  'billing-service'        : 'services/billing',
+  'fake-payment-gateway'   : 'services/fake-payment-gateway',
+  'payments-service'       : 'services/payments',
+  'notifications-service'  : 'services/notifications',
+  'administration-service' : 'services/administration'
+]
+
+pipeline {
+  agent { label 'docker' }
+
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+    timestamps()
+    timeout(time: 120, unit: 'MINUTES')
+  }
+
+  parameters {
+    choice(name: 'DEPLOY_ENVIRONMENT', choices: ['dev', 'test', 'staging', 'prod'], description: 'Target environment and image-tag prefix.')
+    string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'Region containing ECR and the EKS cluster.')
+    string(name: 'AWS_ACCOUNT_ID', defaultValue: '', description: 'Optional expected AWS account ID; blank discovers it using STS.')
+    string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'aws-credentials', description: 'Jenkins AWS credential ID.')
+    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'hospital-eks', description: 'Target EKS cluster name.')
+    string(name: 'K8S_NAMESPACE', defaultValue: 'hospital', description: 'Base Kubernetes namespace; the environment is appended.')
+    string(name: 'HELM_RELEASE', defaultValue: 'hospital', description: 'Helm release name.')
+    string(name: 'ECR_REPOSITORY_PREFIX', defaultValue: 'hospital-management', description: 'ECR repository path prefix.')
+    string(name: 'IMAGE_PREFIX', defaultValue: 'hospital-management', description: 'Image repository name prefix.')
+    string(name: 'MONGODB_CREDENTIALS_ID', defaultValue: 'hospital-mongodb-credentials', description: 'Jenkins Username/Password credential for MongoDB.')
+    booleanParam(name: 'CREATE_ECR_REPOSITORIES', defaultValue: true, description: 'Create missing ECR repositories.')
+    choice(name: 'TRIVY_SEVERITY', choices: ['CRITICAL', 'HIGH,CRITICAL', 'MEDIUM,HIGH,CRITICAL'], description: 'Vulnerability severities that fail the pipeline.')
+    booleanParam(name: 'IGNORE_UNFIXED', defaultValue: true, description: 'Ignore vulnerabilities without an available fix.')
+    booleanParam(name: 'PUSH_ENVIRONMENT_LATEST', defaultValue: true, description: 'Also publish <environment>-latest tags.')
+    string(name: 'HELM_TIMEOUT', defaultValue: '15m', description: 'Helm deployment and rollback timeout.')
+  }
+
+  environment {
+    DOCKER_BUILDKIT = '1'
+    BUILDKIT_PROGRESS = 'plain'
+    KUBECONFIG = "${WORKSPACE}/.kube/config"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        script {
+          env.GIT_SHORT_SHA = sh(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim()
+          env.IMAGE_TAG = "${params.DEPLOY_ENVIRONMENT}-${env.BUILD_NUMBER}-${env.GIT_SHORT_SHA}"
+          env.TARGET_NAMESPACE = "${params.K8S_NAMESPACE}-${params.DEPLOY_ENVIRONMENT}"
+          currentBuild.displayName = "#${env.BUILD_NUMBER} ${params.DEPLOY_ENVIRONMENT} ${env.GIT_SHORT_SHA}"
+        }
+      }
+    }
+
+    stage('Validate') {
+      steps {
+        script {
+          def dnsLabel = /[a-z0-9]([-a-z0-9]*[a-z0-9])?/
+          [params.EKS_CLUSTER_NAME, params.K8S_NAMESPACE, params.HELM_RELEASE, params.IMAGE_PREFIX].each { value ->
+            if (!(value ==~ dnsLabel)) {
+              error("Invalid lowercase name: ${value}")
+            }
+          }
+          if (!(params.ECR_REPOSITORY_PREFIX ==~ /[a-z0-9]+([._\/-][a-z0-9]+)*/)) {
+            error('ECR_REPOSITORY_PREFIX contains unsupported characters.')
+          }
+          if (!(params.AWS_REGION ==~ /[a-z]{2}(-gov)?-[a-z]+-\d/)) {
+            error('AWS_REGION is invalid.')
+          }
+          if (params.AWS_ACCOUNT_ID && !(params.AWS_ACCOUNT_ID ==~ /\d{12}/)) {
+            error('AWS_ACCOUNT_ID must be blank or 12 digits.')
+          }
+          if (!(params.HELM_TIMEOUT ==~ /\d+(s|m|h)/)) {
+            error('HELM_TIMEOUT must look like 900s, 15m, or 1h.')
+          }
+        }
+        sh '''
+          set -eu
+          for command in docker trivy aws kubectl helm; do command -v "$command"; done
+          test -f Dockerfile
+          test -f helm/hospital/Chart.yaml
+          helm lint helm/hospital
+        '''
+      }
+    }
+
+    stage('Connect AWS and EKS') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDENTIALS_ID]]) {
+          script {
+            def accountId = sh(script: "aws sts get-caller-identity --query Account --output text --region '${params.AWS_REGION}'", returnStdout: true).trim()
+            if (params.AWS_ACCOUNT_ID && params.AWS_ACCOUNT_ID != accountId) {
+              error("Authenticated AWS account ${accountId} does not match AWS_ACCOUNT_ID.")
+            }
+            env.RESOLVED_AWS_ACCOUNT_ID = accountId
+            env.REGISTRY_HOST = "${accountId}.dkr.ecr.${params.AWS_REGION}.amazonaws.com"
+            env.REGISTRY_BASE = "${env.REGISTRY_HOST}/${params.ECR_REPOSITORY_PREFIX}"
+            sh """
+              mkdir -p '${env.WORKSPACE}/.kube'
+              aws eks describe-cluster --name '${params.EKS_CLUSTER_NAME}' --region '${params.AWS_REGION}' >/dev/null
+              aws eks update-kubeconfig --name '${params.EKS_CLUSTER_NAME}' --region '${params.AWS_REGION}' --alias 'jenkins-${params.EKS_CLUSTER_NAME}'
+              kubectl cluster-info
+            """
+          }
+        }
+      }
+    }
+
+    stage('Prepare ECR') {
+      when { expression { params.CREATE_ECR_REPOSITORIES } }
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDENTIALS_ID]]) {
+          script {
+            services.keySet().each { serviceName ->
+              def repository = "${params.ECR_REPOSITORY_PREFIX}/${params.IMAGE_PREFIX}-${serviceName}"
+              sh """
+                aws ecr describe-repositories --repository-names '${repository}' --region '${params.AWS_REGION}' >/dev/null 2>&1 || \\
+                aws ecr create-repository --repository-name '${repository}' --image-scanning-configuration scanOnPush=true --image-tag-mutability MUTABLE --region '${params.AWS_REGION}' >/dev/null
+              """
+            }
+          }
+        }
+      }
+    }
+
+    stage('Build Images') {
+      steps {
+        script {
+          def tasks = [:]
+          services.each { serviceName, appDir ->
+            tasks[serviceName] = {
+              def image = "${env.REGISTRY_BASE}/${params.IMAGE_PREFIX}-${serviceName}:${env.IMAGE_TAG}"
+              sh """
+                docker build --pull --build-arg APP_DIR='${appDir}' \\
+                  --label org.opencontainers.image.revision='${env.GIT_COMMIT}' \\
+                  --label org.opencontainers.image.version='${env.IMAGE_TAG}' \\
+                  --label com.liontech.environment='${params.DEPLOY_ENVIRONMENT}' \\
+                  --tag '${image}' .
+              """
+            }
+          }
+          parallel tasks
+        }
+      }
+    }
+
+    stage('Scan Images') {
+      steps {
+        sh 'trivy image --no-progress --download-db-only'
+        script {
+          def tasks = [:]
+          services.keySet().each { serviceName ->
+            tasks[serviceName] = {
+              def image = "${env.REGISTRY_BASE}/${params.IMAGE_PREFIX}-${serviceName}:${env.IMAGE_TAG}"
+              def ignoreUnfixed = params.IGNORE_UNFIXED ? '--ignore-unfixed' : ''
+              sh """
+                mkdir -p trivy-reports
+                trivy image --quiet --no-progress --skip-db-update --scanners vuln --exit-code 1 ${ignoreUnfixed} \\
+                  --severity '${params.TRIVY_SEVERITY}' --format json \\
+                  --output 'trivy-reports/${serviceName}.json' '${image}'
+              """
+            }
+          }
+          parallel tasks
+        }
+      }
+      post {
+        always { archiveArtifacts artifacts: 'trivy-reports/*.json', allowEmptyArchive: true, fingerprint: true }
+      }
+    }
+
+    stage('Push Images') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDENTIALS_ID]]) {
+          script {
+            sh "aws ecr get-login-password --region '${params.AWS_REGION}' | docker login --username AWS --password-stdin '${env.REGISTRY_HOST}'"
+            services.keySet().each { serviceName ->
+              def repository = "${env.REGISTRY_BASE}/${params.IMAGE_PREFIX}-${serviceName}"
+              sh "docker push '${repository}:${env.IMAGE_TAG}'"
+              if (params.PUSH_ENVIRONMENT_LATEST) {
+                sh "docker tag '${repository}:${env.IMAGE_TAG}' '${repository}:${params.DEPLOY_ENVIRONMENT}-latest' && docker push '${repository}:${params.DEPLOY_ENVIRONMENT}-latest'"
+              }
+            }
+          }
+        }
+      }
+    }
+
+    stage('Deploy to EKS') {
+      steps {
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDENTIALS_ID],
+          usernamePassword(credentialsId: params.MONGODB_CREDENTIALS_ID, usernameVariable: 'MONGO_USERNAME', passwordVariable: 'MONGO_PASSWORD')
+        ]) {
+          withEnv([
+            "PIPELINE_NAMESPACE=${env.TARGET_NAMESPACE}",
+            "PIPELINE_RELEASE=${params.HELM_RELEASE}",
+            "PIPELINE_REGISTRY=${env.REGISTRY_BASE}",
+            "PIPELINE_IMAGE_PREFIX=${params.IMAGE_PREFIX}",
+            "PIPELINE_IMAGE_TAG=${env.IMAGE_TAG}",
+            "PIPELINE_HELM_TIMEOUT=${params.HELM_TIMEOUT}"
+          ]) {
+            sh '''
+              set -eu
+              kubectl create namespace "$PIPELINE_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+              kubectl -n "$PIPELINE_NAMESPACE" create secret generic hospital-mongodb-auth \
+                --from-literal=username="$MONGO_USERNAME" \
+                --from-literal=password="$MONGO_PASSWORD" \
+                --dry-run=client -o yaml | kubectl apply -f -
+              helm upgrade --install "$PIPELINE_RELEASE" helm/hospital \
+                --namespace "$PIPELINE_NAMESPACE" \
+                --set-string global.imageRegistry="$PIPELINE_REGISTRY" \
+                --set-string global.imagePrefix="$PIPELINE_IMAGE_PREFIX" \
+                --set-string global.imageTag="$PIPELINE_IMAGE_TAG" \
+                --atomic --wait --timeout "$PIPELINE_HELM_TIMEOUT" --history-max 10
+              kubectl -n "$PIPELINE_NAMESPACE" get deployments,services,pods
+            '''
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Deployed ${env.IMAGE_TAG} to EKS namespace ${env.TARGET_NAMESPACE}."
+    }
+    always {
+      sh 'docker logout "${REGISTRY_HOST:-}" >/dev/null 2>&1 || true'
+      sh '''
+        if [ -n "${IMAGE_TAG:-}" ]; then
+          docker image ls --format '{{.Repository}}:{{.Tag}}' | grep ":${IMAGE_TAG}$" | xargs -r docker image rm -f || true
+        fi
+      '''
+      deleteDir()
+    }
+  }
+}

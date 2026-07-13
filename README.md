@@ -169,3 +169,9 @@ Jenkins agent requirements:
 - Jenkins plugins: Pipeline, Credentials Binding, AWS Credentials, Timestamper, and Workspace Cleanup
 
 Important parameters include the deployment environment, registry provider, image/repository prefixes, registry credential IDs, AWS account/region settings, Trivy severity threshold, and optional `<environment>-latest` promotion.
+
+### EKS Pipeline
+
+`Jenkinsfile.eks` provides the ECR and Amazon EKS workflow. It builds and scans all application images, pushes them to ECR, creates the MongoDB credential Secret from Jenkins credentials, and deploys the included `helm/hospital` chart with atomic rollout verification.
+
+In addition to the tools listed above, the Jenkins agent needs `kubectl`, Helm 3, and AWS permissions for STS, ECR, EKS cluster discovery, and EKS authentication. Configure a Jenkins Username/Password credential for MongoDB (default ID `hospital-mongodb-credentials`). The target EKS cluster must already exist, the Jenkins AWS principal must be authorized to access it, and the cluster needs a default EBS-backed StorageClass for MongoDB.

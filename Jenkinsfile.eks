@@ -13,7 +13,7 @@ def services = [
 ]
 
 pipeline {
-  agent { label 'docker' }
+  agent any
 
   options {
     buildDiscarder(logRotator(numToKeepStr: '30'))

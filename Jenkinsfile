@@ -27,7 +27,7 @@ pipeline {
     choice(name: 'DEPLOY_ENVIRONMENT', choices: ['dev', 'test', 'staging', 'prod'], description: 'Environment included in the image tags.')
     choice(name: 'REGISTRY_PROVIDER', choices: ['dockerhub', 'ecr'], description: 'Registry that receives the scanned images.')
     string(name: 'IMAGE_PREFIX', defaultValue: 'hospital-management', description: 'Prefix used for every image repository.')
-    string(name: 'DOCKERHUB_NAMESPACE', defaultValue: 'liontechacademy', description: 'Docker Hub user or organization.')
+    string(name: 'DOCKERHUB_NAMESPACE', defaultValue: 'intellivinus2026', description: 'Docker Hub user or organization.')
     string(name: 'DOCKERHUB_CREDENTIALS_ID', defaultValue: 'dockerhub-credentials', description: 'Jenkins Username/Password credential ID for Docker Hub.')
     string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS region containing the ECR repositories.')
     string(name: 'AWS_ACCOUNT_ID', defaultValue: '', description: 'Optional expected 12-digit AWS account ID. Leave blank to discover it with STS.')

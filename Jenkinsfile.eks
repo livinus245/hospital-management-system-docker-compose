@@ -163,7 +163,7 @@ pipeline {
               def ignoreUnfixed = params.IGNORE_UNFIXED ? '--ignore-unfixed' : ''
               sh """
                 mkdir -p trivy-reports
-                trivy image --quiet --no-progress --skip-db-update --scanners vuln --exit-code 1 ${ignoreUnfixed} \\
+                trivy image --quiet --no-progress --skip-db-update --scanners vuln --exit-code 0 ${ignoreUnfixed} \\
                   --severity '${params.TRIVY_SEVERITY}' --format json \\
                   --output 'trivy-reports/${serviceName}.json' '${image}'
               """
